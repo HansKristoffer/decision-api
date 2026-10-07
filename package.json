@@ -1,0 +1,68 @@
+{
+	"name": "decision-api",
+	"version": "0.0.0",
+	"description": "One typed client for decision models (TypeSafe Jev, Cloudflare Clef, OpenAI gpt-6-luna) that answer questions with calibrated probabilities",
+	"license": "MIT",
+	"author": "Kristoffer Hansen",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/HansKristoffer/decision-api.git"
+	},
+	"homepage": "https://github.com/HansKristoffer/decision-api#readme",
+	"bugs": {
+		"url": "https://github.com/HansKristoffer/decision-api/issues"
+	},
+	"type": "module",
+	"engines": {
+		"node": ">=18"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"!dist/**/*.test.*"
+	],
+	"sideEffects": false,
+	"keywords": [
+		"llm",
+		"classification",
+		"decision",
+		"zod",
+		"openai",
+		"cloudflare",
+		"typesafe"
+	],
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"lint": "bun run typecheck && biome check",
+		"lint:write": "bun run typecheck && biome check --write",
+		"prepublishOnly": "bun run build",
+		"verify:package": "node scripts/verify-package.mjs",
+		"prepare": "husky"
+	},
+	"dependencies": {
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.4",
+		"@types/bun": "1.4.1",
+		"typescript": "6.0.3",
+		"husky": "^9.1.7"
+	},
+	"peerDependencies": {
+		"typescript": ">=6.0.0"
+	},
+	"peerDependenciesMeta": {
+		"typescript": {
+			"optional": true
+		}
+	}
+}
