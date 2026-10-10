@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/HansKristoffer/decision-api/compare/v1.0.0...v1.1.0) (2026-10-10)
+
+
+### Features
+
+* report provider status and refusal kinds on DecisionError ([#3](https://github.com/HansKristoffer/decision-api/issues/3)) ([42d6450](https://github.com/HansKristoffer/decision-api/commit/42d6450b86713ad1666c6e2e6fd3bc19736fc47f))
+
 ## 1.0.0 (2026-10-10)
 
 
