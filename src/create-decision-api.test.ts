@@ -638,9 +638,9 @@ function typeChecks() {
 	typesafeOnly({ ...ASK, questions: QUESTIONS })
 	// @ts-expect-error clef needs a Cloudflare key
 	typesafeOnly({ ...ASK, questions: QUESTIONS }, 'clef')
-	// @ts-expect-error OpenRouter models need an OpenRouter key
 	typesafeOnly(
 		{ ...ASK, questions: QUESTIONS },
+		// @ts-expect-error OpenRouter models need an OpenRouter key
 		'microsoft/microsoft-decision-1'
 	)
 
