@@ -10,7 +10,8 @@ import {
 const KEYS = {
 	typesafe: 'typesafe-key',
 	cloudflare: { apiToken: 'cloudflare-token', accountId: 'account-1' },
-	openai: 'openai-key'
+	openai: 'openai-key',
+	openrouter: 'openrouter-key'
 }
 
 const decide = createDecisionApi({ keys: KEYS, defaultModel: 'jev' })
@@ -112,6 +113,39 @@ test('a Clef call goes to Workers AI and reads the answers out of its envelope',
 	expect(url).toEndWith('/ai/run/@cf/cloudflare/clef-flash')
 	expect(body.model).toBe('clef-flash')
 	expect(answers?.refund.noul).toBe(0.88)
+})
+
+test('an OpenRouter model goes to its Decisions API under its own slug', async () => {
+	let url = ''
+	let init: RequestInit | undefined
+	spyOn(globalThis, 'fetch').mockImplementation((async (
+		input: Parameters<typeof fetch>[0],
+		requestInit?: Parameters<typeof fetch>[1]
+	) => {
+		url = String(input)
+		init = requestInit as RequestInit | undefined
+		return Response.json({
+			id: 'gen-dec-1',
+			model: 'microsoft/microsoft-decision-1-20261009',
+			provider: 'Azure',
+			answers: { refund: { type: 'noul', noul: 0.91 } },
+			usage: { input_tokens: 80, output_tokens: 0, cost: 0.0000034 }
+		})
+	}) as typeof fetch)
+
+	const answers = await decide(
+		{ ...ASK, questions: QUESTIONS },
+		'microsoft/microsoft-decision-1'
+	)
+
+	expect(url).toBe('https://openrouter.ai/api/alpha/decisions')
+	expect(new Headers(init?.headers).get('authorization')).toBe(
+		'Bearer openrouter-key'
+	)
+	expect(JSON.parse(String(init?.body)).model).toBe(
+		'microsoft/microsoft-decision-1'
+	)
+	expect(answers?.refund.noul).toBe(0.91)
 })
 
 const LUNA_QUESTIONS = {
@@ -604,6 +638,11 @@ function typeChecks() {
 	typesafeOnly({ ...ASK, questions: QUESTIONS })
 	// @ts-expect-error clef needs a Cloudflare key
 	typesafeOnly({ ...ASK, questions: QUESTIONS }, 'clef')
+	typesafeOnly(
+		{ ...ASK, questions: QUESTIONS },
+		// @ts-expect-error OpenRouter models need an OpenRouter key
+		'microsoft/microsoft-decision-1'
+	)
 
 	createDecisionApi({
 		keys: { typesafe: 'key' },
