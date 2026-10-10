@@ -53,20 +53,40 @@ export type DecisionErrorKind =
 	| 'timeout'
 	/** The call's own signal (or `defaultSignal`) aborted it. */
 	| 'aborted'
+	/** 401 or 403: the provider rejected the key. Retrying will not help. */
+	| 'unauthorized'
+	/** 402: the provider's account is out of credits. Retrying will not help. */
+	| 'out-of-credits'
+	/** 429 that outlasted the retry, or asked to wait longer than a call can. */
+	| 'rate-limited'
+	/** Any other refused request (see `status`), or a transport error (no `status`). */
 	| 'request-failed'
 	| 'unreadable-response'
 	| 'answer-mismatch'
 	| 'usage-failed'
 
 export class DecisionError extends Error {
+	readonly provider: DecisionProvider
+
 	constructor(
 		readonly kind: DecisionErrorKind,
 		readonly model: DecisionModel,
-		message: string
+		message: string,
+		/** The HTTP status, when the provider answered. */
+		readonly status?: number
 	) {
 		super(message)
 		this.name = 'DecisionError'
+		this.provider = DECISION_MODELS[model].provider
 	}
+}
+
+/** The kind a refused response maps to; anything unlisted is `request-failed`. */
+const KIND_BY_STATUS: Partial<Record<number, DecisionErrorKind>> = {
+	401: 'unauthorized',
+	402: 'out-of-credits',
+	403: 'unauthorized',
+	429: 'rate-limited'
 }
 
 /** Sends one request. Replace it to route calls through your own budget or proxy. */
@@ -148,10 +168,12 @@ export function createDecisionApi<
 		const model = requestedModel ?? options.defaultModel
 		if (!model) throw new Error('No model given and no defaultModel set')
 
-		const fail = (kind: DecisionErrorKind, message: string) => {
-			options.onError?.(new DecisionError(kind, model, message), context)
+		const report = (error: DecisionError) => {
+			options.onError?.(error, context)
 			return null
 		}
+		const fail = (kind: DecisionErrorKind, message: string) =>
+			report(new DecisionError(kind, model, message))
 
 		if (Object.keys(questions).length === 0) {
 			return {} as DecisionAnswers<typeof questions>
@@ -181,7 +203,7 @@ export function createDecisionApi<
 				timeoutMs: timeoutMs ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 			})
 		} catch (error) {
-			if (error instanceof DecisionError) return fail(error.kind, error.message)
+			if (error instanceof DecisionError) return report(error)
 			return fail('request-failed', messageOf(error))
 		}
 
@@ -292,9 +314,11 @@ async function postWithRetry(input: {
 				delayMs > MAX_RETRY_DELAY_MS
 			) {
 				const body = (await response.text()).slice(0, 200)
-				throw failure(
-					'request-failed',
-					`${input.model} ${response.status}: ${body}`
+				throw new DecisionError(
+					KIND_BY_STATUS[response.status] ?? 'request-failed',
+					input.model,
+					`${input.model} ${response.status}: ${body}`,
+					response.status
 				)
 			}
 			// An unread body holds its connection until garbage collection.

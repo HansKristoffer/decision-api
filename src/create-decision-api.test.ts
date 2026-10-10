@@ -575,6 +575,60 @@ function decideReporting(options: { defaultSignal?: () => AbortSignal }) {
 	return { decideWith, onError }
 }
 
+test.each([
+	[402, 'out-of-credits'],
+	[401, 'unauthorized'],
+	[500, 'request-failed']
+])('a %i refusal reports kind %s with its status', async (status, kind) => {
+	mockFetch(
+		() =>
+			new Response('refused', {
+				status,
+				// No retry wait for the 500.
+				headers: { 'retry-after': '0' }
+			})
+	)
+	const { decideWith, onError } = decideReporting({})
+
+	expect(await decideWith({ ...ASK, questions: QUESTIONS })).toBeNull()
+	expect(onError.mock.calls[0]?.[0]).toMatchObject({
+		kind,
+		status,
+		model: 'jev',
+		provider: 'typesafe',
+		message: `jev ${status}: refused`
+	})
+})
+
+test('a 429 that outlasts the retry is rate-limited', async () => {
+	mockFetch(
+		() =>
+			new Response('slow down', {
+				status: 429,
+				headers: { 'retry-after': '0' }
+			})
+	)
+	const { decideWith, onError } = decideReporting({})
+
+	await decideWith({ ...ASK, questions: QUESTIONS })
+	expect(onError.mock.calls[0]?.[0]).toMatchObject({
+		kind: 'rate-limited',
+		status: 429
+	})
+})
+
+test('a transport error has no status', async () => {
+	mockFetch(() => {
+		throw new TypeError('fetch failed')
+	})
+	const { decideWith, onError } = decideReporting({})
+
+	await decideWith({ ...ASK, questions: QUESTIONS })
+	const error = onError.mock.calls[0]?.[0]
+	expect(error?.kind).toBe('request-failed')
+	expect(error?.status).toBeUndefined()
+})
+
 test('a body that is not JSON is unreadable, not a failed request', async () => {
 	mockFetch(() => new Response('<html>gateway</html>'))
 	const { decideWith, onError } = decideReporting({})
