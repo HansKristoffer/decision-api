@@ -14,6 +14,8 @@ export type DecisionProviderKeys = {
 	typesafe?: string
 	cloudflare?: { apiToken: string; accountId: string }
 	openai?: string
+	/** One key for every model OpenRouter hosts (the `vendor/model` names). */
+	openrouter?: string
 }
 
 export type DecisionProvider = keyof DecisionProviderKeys
@@ -28,7 +30,13 @@ export const DECISION_MODELS = {
 	jev: { provider: 'typesafe', inputUsdPerMTok: 0.042 },
 	clef: { provider: 'cloudflare', inputUsdPerMTok: 0.24 },
 	'clef-flash': { provider: 'cloudflare', inputUsdPerMTok: 0.09 },
-	'gpt-6-luna': { provider: 'openai', inputUsdPerMTok: 0.1 }
+	'gpt-6-luna': { provider: 'openai', inputUsdPerMTok: 0.1 },
+	// OpenRouter models are named by their OpenRouter slug, so adding one is
+	// one line here: https://openrouter.ai/rankings/decisions
+	'microsoft/microsoft-decision-1': {
+		provider: 'openrouter',
+		inputUsdPerMTok: 0.042
+	}
 } as const satisfies Record<
 	string,
 	{ provider: DecisionProvider; inputUsdPerMTok: number }
@@ -83,6 +91,15 @@ export function buildDecisionRequest(
 		return {
 			url: `https://api.cloudflare.com/client/v4/accounts/${keys.cloudflare?.accountId}/ai/run/@cf/cloudflare/${model}`,
 			headers: headers(keys.cloudflare?.apiToken),
+			body: JSON.stringify({ ...input, model })
+		}
+	}
+
+	if (provider === 'openrouter') {
+		// https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
+		return {
+			url: 'https://openrouter.ai/api/alpha/decisions',
+			headers: headers(keys.openrouter),
 			body: JSON.stringify({ ...input, model })
 		}
 	}
@@ -223,6 +240,8 @@ function fromOpenAiResponse(
 
 const responseSchemas: Record<DecisionProvider, z.ZodType<DecisionResponse>> = {
 	typesafe: DecisionResponseSchema,
+	// OpenRouter's Decisions API speaks System One's shape for every model.
+	openrouter: DecisionResponseSchema,
 	// Workers AI wraps every model's output in its own envelope.
 	cloudflare: z
 		.object({ result: DecisionResponseSchema })

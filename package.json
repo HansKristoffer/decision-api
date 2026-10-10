@@ -1,7 +1,7 @@
 {
 	"name": "decision-api",
 	"version": "0.0.0",
-	"description": "One typed client for decision models (TypeSafe Jev, Cloudflare Clef, OpenAI gpt-6-luna) that answer questions with calibrated probabilities",
+	"description": "One typed client for decision models (TypeSafe Jev, Cloudflare Clef, OpenAI gpt-6-luna, OpenRouter models such as Microsoft-Decision-1) that answer questions with calibrated probabilities",
 	"license": "MIT",
 	"author": "Kristoffer Hansen",
 	"repository": {
@@ -36,7 +36,8 @@
 		"zod",
 		"openai",
 		"cloudflare",
-		"typesafe"
+		"typesafe",
+		"openrouter"
 	],
 	"scripts": {
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -46,6 +47,7 @@
 		"lint:write": "bun run typecheck && biome check --write",
 		"prepublishOnly": "bun run build",
 		"verify:package": "node scripts/verify-package.mjs",
+		"bench": "bun bench/run.ts",
 		"prepare": "husky"
 	},
 	"dependencies": {
