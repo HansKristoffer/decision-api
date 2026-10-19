@@ -1,6 +1,6 @@
 # decision-api
 
-One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1`), and returns the same answer shape from all of them. It depends only on `zod`.
+One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1` and `typesafe/jev-1.13`), and returns the same answer shape from all of them. It depends only on `zod`.
 
 ```sh
 npm install decision-api
