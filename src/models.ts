@@ -36,7 +36,9 @@ export const DECISION_MODELS = {
 	'microsoft/microsoft-decision-1': {
 		provider: 'openrouter',
 		inputUsdPerMTok: 0.042
-	}
+	},
+	// TypeSafe's Jev 1.13 on OpenRouter, served on OpenRouter's zero-data-retention list
+	'typesafe/jev-1.13': { provider: 'openrouter', inputUsdPerMTok: 0.042 }
 } as const satisfies Record<
 	string,
 	{ provider: DecisionProvider; inputUsdPerMTok: number }
