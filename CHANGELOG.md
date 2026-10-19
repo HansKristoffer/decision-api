@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/HansKristoffer/decision-api/compare/v1.1.0...v1.2.0) (2026-10-19)
+
+
+### Features
+
+* add typesafe/jev-1.13 as an OpenRouter model ([#5](https://github.com/HansKristoffer/decision-api/issues/5)) ([8a14a92](https://github.com/HansKristoffer/decision-api/commit/8a14a92b5e276a653391682c4ccb84f5aefbb80f))
+
 ## [1.1.0](https://github.com/HansKristoffer/decision-api/compare/v1.0.0...v1.1.0) (2026-10-10)
 
 
