@@ -3,6 +3,7 @@
 // (`questions.ts`).
 
 import { z } from 'zod'
+import { type DecisionImage, toAssets } from './images.ts'
 import {
 	type DecisionQuestion,
 	type DecisionResponse,
@@ -21,30 +22,54 @@ export type DecisionProviderKeys = {
 export type DecisionProvider = keyof DecisionProviderKeys
 
 /**
- * USD per million input tokens; output is free on every provider, because an
- * answer is a few tokens of enum rather than generated prose. Jev's rate is
- * from TypeSafe's launch material (the docs publish no price sheet); the rest
- * are the providers' list prices (2026-10).
+ * `inputUsdPerMTok` is USD per million input tokens; output is free on every
+ * provider, because an answer is a few tokens of enum rather than generated
+ * prose. Jev's rate is from TypeSafe's launch material (the docs publish no
+ * price sheet); the rest are the providers' list prices (2026-10). Images are
+ * billed as input tokens at the same rate.
+ *
+ * `images` marks the models this client sends images to. Jev reads them
+ * anywhere in the state, instructions and criteria (1.13 and later:
+ * https://docs.typesafe.ai/images). Clef and gpt-6-luna read images too, but
+ * in wire formats this client does not speak yet.
  */
 export const DECISION_MODELS = {
-	jev: { provider: 'typesafe', inputUsdPerMTok: 0.042 },
-	clef: { provider: 'cloudflare', inputUsdPerMTok: 0.24 },
-	'clef-flash': { provider: 'cloudflare', inputUsdPerMTok: 0.09 },
-	'gpt-6-luna': { provider: 'openai', inputUsdPerMTok: 0.1 },
+	jev: { provider: 'typesafe', inputUsdPerMTok: 0.042, images: true },
+	clef: { provider: 'cloudflare', inputUsdPerMTok: 0.24, images: false },
+	'clef-flash': {
+		provider: 'cloudflare',
+		inputUsdPerMTok: 0.09,
+		images: false
+	},
+	'gpt-6-luna': { provider: 'openai', inputUsdPerMTok: 0.1, images: false },
 	// OpenRouter models are named by their OpenRouter slug, so adding one is
 	// one line here: https://openrouter.ai/rankings/decisions
 	'microsoft/microsoft-decision-1': {
 		provider: 'openrouter',
-		inputUsdPerMTok: 0.042
+		inputUsdPerMTok: 0.042,
+		images: false
 	},
-	// TypeSafe's Jev 1.13 on OpenRouter, served on OpenRouter's zero-data-retention list
-	'typesafe/jev-1.13': { provider: 'openrouter', inputUsdPerMTok: 0.042 }
+	// TypeSafe's Jev 1.13 on OpenRouter, served on OpenRouter's
+	// zero-data-retention list. OpenRouter forwards `assets` to Jev as written:
+	// https://openrouter.ai/docs/guides/community/multimodal-decisions
+	'typesafe/jev-1.13': {
+		provider: 'openrouter',
+		inputUsdPerMTok: 0.042,
+		images: true
+	}
 } as const satisfies Record<
 	string,
-	{ provider: DecisionProvider; inputUsdPerMTok: number }
+	{ provider: DecisionProvider; inputUsdPerMTok: number; images: boolean }
 >
 
 export type DecisionModel = keyof typeof DECISION_MODELS
+
+/** The models that read images. */
+export type DecisionImageModel = {
+	[Model in DecisionModel]: (typeof DECISION_MODELS)[Model]['images'] extends true
+		? Model
+		: never
+}[DecisionModel]
 
 type ModelsOf<Provider> = {
 	[Model in DecisionModel]: (typeof DECISION_MODELS)[Model]['provider'] extends Provider
@@ -64,6 +89,8 @@ export type ModelsFor<Keys extends DecisionProviderKeys> = ModelsOf<
 type RequestInput = {
 	state: unknown
 	questions: Record<string, DecisionQuestion>
+	/** Sent only to models with `images: true`; the caller checks. */
+	images: DecisionImage[]
 }
 
 /** One POST: where it goes, and the headers and body it carries. */
@@ -80,12 +107,24 @@ export function buildDecisionRequest(
 			'content-type': 'application/json'
 		}
 	}
+	const { state, questions, images } = input
+	// A text-only request goes out exactly as it did before images existed.
+	const assets = images.length > 0 ? { assets: toAssets(images) } : {}
 
 	if (provider === 'typesafe') {
 		return {
 			url: 'https://api.typesafe.ai/v1/systemone',
-			headers: headers(keys.typesafe),
-			body: JSON.stringify({ ...input, model: 'jev-latest' })
+			headers: {
+				...headers(keys.typesafe),
+				// Images are opt-in per request while TypeSafe calls them a preview.
+				...(images.length > 0 && { 'typesafe-danger-zone-images': 'true' })
+			},
+			body: JSON.stringify({
+				state,
+				questions,
+				...assets,
+				model: 'jev-latest'
+			})
 		}
 	}
 
@@ -93,7 +132,7 @@ export function buildDecisionRequest(
 		return {
 			url: `https://api.cloudflare.com/client/v4/accounts/${keys.cloudflare?.accountId}/ai/run/@cf/cloudflare/${model}`,
 			headers: headers(keys.cloudflare?.apiToken),
-			body: JSON.stringify({ ...input, model })
+			body: JSON.stringify({ state, questions, model })
 		}
 	}
 
@@ -102,14 +141,14 @@ export function buildDecisionRequest(
 		return {
 			url: 'https://openrouter.ai/api/alpha/decisions',
 			headers: headers(keys.openrouter),
-			body: JSON.stringify({ ...input, model })
+			body: JSON.stringify({ state, questions, ...assets, model })
 		}
 	}
 
 	return {
 		url: 'https://api.openai.com/v1/decisions',
 		headers: headers(keys.openai),
-		body: JSON.stringify(toOpenAiRequest(model, input))
+		body: JSON.stringify(toOpenAiRequest(model, { state, questions }))
 	}
 }
 
@@ -158,7 +197,10 @@ function toOpenAiQuestion(name: string, question: DecisionQuestion) {
 	}
 }
 
-function toOpenAiRequest(model: DecisionModel, input: RequestInput) {
+function toOpenAiRequest(
+	model: DecisionModel,
+	input: Omit<RequestInput, 'images'>
+) {
 	return {
 		model,
 		input:
