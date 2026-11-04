@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/HansKristoffer/decision-api/compare/v1.2.0...v1.3.0) (2026-11-04)
+
+
+### Features
+
+* add image inputs for Jev decision models ([a61827c](https://github.com/HansKristoffer/decision-api/commit/a61827c9f1a4ae8733bd81ca8e988dbf6cf492a3))
+* add image inputs for Jev decision models ([87c1d93](https://github.com/HansKristoffer/decision-api/commit/87c1d93179f6c6296d7d26ba559d56ee4065d948))
+
 ## [1.2.0](https://github.com/HansKristoffer/decision-api/compare/v1.1.0...v1.2.0) (2026-10-19)
 
 
