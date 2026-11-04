@@ -8,7 +8,16 @@ export {
 	type DecisionUsage
 } from './create-decision-api.ts'
 export {
+	type DecisionImage,
+	type DecisionImageFormat,
+	type DecisionImageText,
+	type DecisionText,
+	image,
+	withImages
+} from './images.ts'
+export {
 	DECISION_MODELS,
+	type DecisionImageModel,
 	type DecisionModel,
 	type DecisionProvider,
 	type DecisionProviderKeys,

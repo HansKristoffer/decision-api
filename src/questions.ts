@@ -1,31 +1,33 @@
 // The question and answer shapes every call speaks. They are System One's own
 // (TypeSafe's Jev, Cloudflare's Clef); a provider with another wire format
-// translates to and from them in `models.ts`.
+// translates to and from them in `models.ts`. Instructions and criteria take
+// images (`DecisionText`) on the models that read them.
 
 import { z } from 'zod'
+import type { DecisionText } from './images.ts'
 
 /** Probability that the condition holds. No separate confidence: this IS it. */
 export type DecisionNoul = {
 	type: 'noul'
-	instructions: string
+	instructions: DecisionText
 	/** Optional, but a `true`/`false` gloss is what keeps a noul from drifting. */
-	criteria?: { true: string; false: string }
+	criteria?: { true: DecisionText; false: DecisionText }
 }
 
 /** One option from a defined set, with the distribution across all of them. */
 export type DecisionChoice<Option extends string = string> = {
 	type: 'choice'
-	instructions: string
+	instructions: DecisionText
 	/** Option -> what that option means. Include a no-match option when one may fit nothing. */
-	criteria: Record<Option, string>
+	criteria: Record<Option, DecisionText>
 }
 
 /** A position on ordered, concretely described levels. */
 export type DecisionScore = {
 	type: 'score'
-	instructions: string
+	instructions: DecisionText
 	/** Two or more levels, lowest first; each must stand on its own. */
-	criteria: string[]
+	criteria: DecisionText[]
 }
 
 export type DecisionQuestion = DecisionNoul | DecisionChoice | DecisionScore
@@ -49,7 +51,7 @@ type AnswerFor<Q> = Q extends { type: 'noul' }
 	? DecisionNoulAnswer
 	: Q extends {
 				type: 'choice'
-				criteria: Record<infer Option extends string, string>
+				criteria: Record<infer Option extends string, DecisionText>
 			}
 		? DecisionChoiceAnswer<Option>
 		: Q extends { type: 'score' }

@@ -1,6 +1,14 @@
 import {
+	collectImages,
+	type DecisionImage,
+	type DecisionImageText,
+	type DecisionText,
+	detachedReference
+} from './images.ts'
+import {
 	buildDecisionRequest,
 	DECISION_MODELS,
+	type DecisionImageModel,
 	type DecisionModel,
 	type DecisionProvider,
 	type DecisionProviderKeys,
@@ -49,6 +57,10 @@ export type DecisionUsage<Model extends DecisionModel = DecisionModel> = {
 
 export type DecisionErrorKind =
 	| 'state-too-large'
+	/** The call holds an image and the model reads none (`images: false`). */
+	| 'images-unsupported'
+	/** An image's reference is in the text without the image: build that text with `withImages`. */
+	| 'image-detached'
 	/** No answer within `timeoutMs`. */
 	| 'timeout'
 	/** The call's own signal (or `defaultSignal`) aborted it. */
@@ -101,9 +113,12 @@ export type DecisionFetch = (
 	}
 ) => Promise<Response>
 
-type DecisionCall<Q extends Record<string, DecisionQuestion>> = {
-	/** A string, or named fields - name them when the state has several parts. */
-	state: unknown
+type DecisionCall<Q extends Record<string, DecisionQuestion>, State> = {
+	/**
+	 * A string, or named fields - name them when the state has several parts.
+	 * Images go in as values, on models that read them.
+	 */
+	state: State
 	questions: Q
 	signal?: AbortSignal
 	timeoutMs?: number
@@ -145,11 +160,49 @@ type DecisionApiOptions<Keys extends DecisionProviderKeys, Default, Context> = {
  * already rejects, which a silent `null` would hide.
  */
 export type DecisionApi<Model extends DecisionModel, Default, Context> = <
-	Q extends Record<string, DecisionQuestion>
+	Q extends Record<string, DecisionQuestion>,
+	State = unknown
 >(
-	input: DecisionCall<Q> & Context,
-	...model: [Default] extends [Model] ? [model?: Model] : [model: Model]
+	input: DecisionCall<Q, State> & Context,
+	...model: ModelArgument<
+		HasImage<State> extends true
+			? Extract<Model, DecisionImageModel>
+			: HasImage<Q> extends true
+				? Extract<Model, DecisionImageModel>
+				: Model,
+		Default
+	>
 ) => Promise<DecisionAnswers<Q> | null>
+
+type ModelArgument<Model, Default> = [Default] extends [Model]
+	? [model?: Model]
+	: [model: Model]
+
+/**
+ * Whether a call's state or questions hold an image, as far as their types
+ * tell: a value typed as any text (`DecisionText`, `unknown`, `any`) does not
+ * say, and the call checks it instead. Stops at a few levels deep, so a
+ * recursive JSON type cannot recurse forever.
+ */
+type HasImage<T, Depth extends unknown[] = []> = 0 extends 1 & T
+	? false
+	: [DecisionText] extends [T]
+		? false
+		: Depth['length'] extends 6
+			? false
+			: true extends ImageIn<T, [...Depth, unknown]>
+				? true
+				: false
+
+type ImageIn<T, Depth extends unknown[]> = T extends
+	| DecisionImage
+	| DecisionImageText
+	? true
+	: T extends readonly (infer Item)[]
+		? HasImage<Item, Depth>
+		: T extends object
+			? { [K in keyof T]-?: HasImage<T[K], Depth> }[keyof T]
+			: false
 
 export function createDecisionApi<
 	const Keys extends DecisionProviderKeys,
@@ -179,6 +232,7 @@ export function createDecisionApi<
 			return {} as DecisionAnswers<typeof questions>
 		}
 
+		// An image counts as its reference here: its tokens are the provider's to count.
 		const stateText = typeof state === 'string' ? state : JSON.stringify(state)
 		const stateChars = stateText.length
 		if (stateChars > maxStateChars) {
@@ -186,6 +240,21 @@ export function createDecisionApi<
 				'state-too-large',
 				`State is ${stateChars} chars, over ${maxStateChars}`
 			)
+		}
+
+		const images = collectImages(questions, collectImages(state))
+		const detached = detachedReference(
+			stateText + JSON.stringify(questions),
+			images
+		)
+		if (detached) {
+			return fail(
+				'image-detached',
+				`${detached} is in the text without its image; write that text with withImages`
+			)
+		}
+		if (images.size > 0 && !DECISION_MODELS[model].images) {
+			return fail('images-unsupported', `${model} does not read images`)
 		}
 
 		const startedAt = Date.now()
@@ -196,7 +265,7 @@ export function createDecisionApi<
 				model,
 				request: buildDecisionRequest(
 					model,
-					{ state, questions },
+					{ state, questions, images: [...images.values()] },
 					options.keys
 				),
 				signal: signal ?? options.defaultSignal?.(),

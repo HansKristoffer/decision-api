@@ -1,6 +1,6 @@
 # decision-api
 
-One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1` and `typesafe/jev-1.13`), and returns the same answer shape from all of them. It depends only on `zod`.
+One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1` and `typesafe/jev-1.13`), and returns the same answer shape from all of them. Jev also reads images. It depends only on `zod`.
 
 ```sh
 npm install decision-api
@@ -49,7 +49,42 @@ TypeScript enforces the setup:
 - **The model is optional only with a default.** Without `defaultModel`, every call must name one.
 - **Usage context is required when typed.** The type of `registerUsage`'s second parameter is required on every call and passed back to `registerUsage` and `onError`.
 
-A call answers `null` instead of throwing, and `onError` says why: `timeout`, `aborted` (the call's own signal), `unauthorized` (401/403, a bad key), `out-of-credits` (402), `rate-limited` (429 after the retry), `request-failed` (any other status, or a transport error), `state-too-large`, `unreadable-response` or `answer-mismatch`. Every error carries its `model` and `provider`, and `status` when the provider answered; a throwing `registerUsage` reports `usage-failed` without failing the call. Retryable statuses (429 and 5xx) are retried once, after the provider's `Retry-After` when it asks for 2 s or less, and not at all when it asks for more. `fetch` replaces the transport, for example to route calls through your own rate limits, and `defaultSignal` supplies the signal for calls that pass none. A call with no questions answers `{}` without a request. The one throw is a call with no model and no `defaultModel`, which TypeScript already rejects.
+A call answers `null` instead of throwing, and `onError` says why: `timeout`, `aborted` (the call's own signal), `unauthorized` (401/403, a bad key), `out-of-credits` (402), `rate-limited` (429 after the retry), `request-failed` (any other status, or a transport error), `state-too-large`, `images-unsupported`, `image-detached` (see [Images](#images)), `unreadable-response` or `answer-mismatch`. Every error carries its `model` and `provider`, and `status` when the provider answered; a throwing `registerUsage` reports `usage-failed` without failing the call. Retryable statuses (429 and 5xx) are retried once, after the provider's `Retry-After` when it asks for 2 s or less, and not at all when it asks for more. `fetch` replaces the transport, for example to route calls through your own rate limits, and `defaultSignal` supplies the signal for calls that pass none. A call with no questions answers `{}` without a request. The one throw is a call with no model and no `defaultModel`, which TypeScript already rejects.
+
+## Images
+
+`jev` and `typesafe/jev-1.13` read images (`images: true` in `DECISION_MODELS`). Make one with `image()` from PNG or JPEG bytes or base64, and put it anywhere text can go: in the state, as a question's instructions or as a criterion. Inside a sentence, write it into a `withImages` template:
+
+```ts
+import { image, withImages } from 'decision-api'
+import { readFile } from 'node:fs/promises'
+
+const door = image(await readFile('door-camera.jpg'))
+const badge = image(await readFile('badge.jpg'))
+const thumbsUp = image(await readFile('thumbs-up.png'))
+
+const answers = await decide({
+	state: { door },
+	questions: {
+		same: {
+			type: 'noul',
+			instructions: withImages`Is the person in \`door\` the one on this badge: ${badge}?`
+		},
+		gesture: {
+			type: 'choice',
+			instructions: 'Which gesture does the hand in `door` make?',
+			criteria: { thumbs_up: thumbsUp, none: 'No hand, or another gesture' }
+		}
+	},
+	customerId: 'c_1'
+})
+```
+
+Each image is sent once, base64-encoded under a unique reference, however often it is used; every use still counts as input tokens. TypeSafe's image preview header is added for you. Put an image several questions use in the state, not in each question's instructions.
+
+- **TypeScript rejects an image on a model that reads none**, when the image's type is visible in the call. Questions typed as `Record<string, DecisionQuestion>` don't show it, so the call checks as well and answers `null` with `images-unsupported`.
+- **A plain template loses the image.** `` `Same as ${badge}?` `` writes only the reference; the call answers `null` with `image-detached` instead of asking about a bare string.
+- **Prepare images first.** `image()` throws for anything but PNG or JPEG. Jev rejects images, and never resizes them, outside 280 to 1568 px a side or over 16 MiB, and ignores EXIF orientation, so scale and rotate before sending ([limits](https://docs.typesafe.ai/images#limits)). TypeSafe calls images a preview: the format and accuracy may change between Jev releases.
 
 ## Benchmark
 
