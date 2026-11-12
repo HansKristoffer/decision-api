@@ -11,7 +11,8 @@ const KEYS = {
 	typesafe: 'typesafe-key',
 	cloudflare: { apiToken: 'cloudflare-token', accountId: 'account-1' },
 	openai: 'openai-key',
-	openrouter: 'openrouter-key'
+	openrouter: 'openrouter-key',
+	google: 'google-key'
 }
 
 const decide = createDecisionApi({ keys: KEYS, defaultModel: 'jev' })
@@ -293,6 +294,107 @@ test('a gpt-6-luna answer outside its question is rejected like any other', asyn
 			'gpt-6-luna'
 		)
 	).toBeNull()
+})
+
+test('a gemini-decision-1 call speaks Gemini Decisions and answers in the shared shape', async () => {
+	let url = ''
+	let init: RequestInit | undefined
+	spyOn(globalThis, 'fetch').mockImplementation((async (
+		input: Parameters<typeof fetch>[0],
+		requestInit?: Parameters<typeof fetch>[1]
+	) => {
+		url = String(input)
+		init = requestInit as RequestInit | undefined
+		return Response.json({
+			answers: {
+				refund: { type: 'noul', noul: 0.91, confidence: 0.91 },
+				team: {
+					type: 'choice',
+					choice: 'billing',
+					probabilities: { billing: 0.8, shipping: 0.2 },
+					confidence: 0.8
+				},
+				severity: {
+					type: 'score',
+					score: 0.7,
+					legend: { '0': 'Minor', '1': 'Major' },
+					probabilities: { '0': 0.3, '1': 0.7 },
+					confidence: 0.7
+				}
+			},
+			usage: {
+				total_input_tokens: 120,
+				input_tokens_by_modality: [{ modality: 'text', tokens: 120 }],
+				total_output_tokens: 0,
+				total_tokens: 120
+			}
+		})
+	}) as typeof fetch)
+
+	const outcome = await decide.result(
+		{ ...ASK, questions: LUNA_QUESTIONS },
+		'gemini-decision-1'
+	)
+
+	expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/decisions')
+	const headers = new Headers(init?.headers)
+	expect(headers.get('x-goog-api-key')).toBe('google-key')
+	expect(headers.has('authorization')).toBe(false)
+	// Object state travels as text; a noul's gloss is renamed, the rest is as sent.
+	expect(JSON.parse(String(init?.body))).toEqual({
+		model: 'gemini-decision-1',
+		input: JSON.stringify(ASK.state),
+		questions: {
+			refund: {
+				type: 'noul',
+				instructions: 'About a refund?',
+				criteria: {
+					true_description: 'Wants money back',
+					false_description: 'Anything else'
+				}
+			},
+			team: LUNA_QUESTIONS.team,
+			severity: LUNA_QUESTIONS.severity
+		}
+	})
+	if (!outcome.ok) throw outcome.error
+	expect(outcome.answers.refund).toEqual({ type: 'noul', noul: 0.91 })
+	expect(outcome.answers.team.choice).toBe('billing')
+	expect(outcome.answers.severity).toEqual({
+		type: 'score',
+		score: 0.7,
+		confidence: 0.7,
+		probabilities: { '0': 0.3, '1': 0.7 }
+	})
+	expect(outcome.usage).toMatchObject({
+		provider: 'google',
+		inputTokens: 120,
+		outputTokens: 0,
+		costUsd: (120 * 0.1) / 1_000_000
+	})
+})
+
+test('a Gemini 400 for a bad key is unauthorized', async () => {
+	const spy = mockFetch(() =>
+		Response.json(
+			{
+				error: {
+					code: 400,
+					message: 'API key not valid. Please pass a valid API key.',
+					status: 'INVALID_ARGUMENT'
+				}
+			},
+			{ status: 400 }
+		)
+	)
+
+	const outcome = await decide.result(
+		{ ...ASK, questions: QUESTIONS },
+		'gemini-decision-1'
+	)
+
+	expect(outcome.ok ? undefined : outcome.error.kind).toBe('unauthorized')
+	expect(spy).toHaveBeenCalledTimes(1)
 })
 
 test('retries once on a retryable status, then succeeds', async () => {

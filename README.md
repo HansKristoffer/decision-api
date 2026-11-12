@@ -1,6 +1,6 @@
 # decision-api
 
-One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1` and `typesafe/jev-1.13`), and returns the same answer shape from all of them. Jev also reads images. It depends only on `zod`.
+One client for decision models: models that answer typed questions with calibrated probabilities instead of text. It speaks TypeSafe's Jev, Cloudflare's Clef and Clef-flash (Workers AI), OpenAI's gpt-6-luna, Google's `gemini-decision-1` (Gemini API) and the decision models on OpenRouter (such as `microsoft/microsoft-decision-1` and `typesafe/jev-1.13`), and returns the same answer shape from all of them. Jev also reads images; Gemini reads images, video, audio and PDFs. It depends only on `zod`.
 
 ```sh
 npm install decision-api
@@ -14,7 +14,8 @@ const decide = createDecisionApi({
 		typesafe: '…',
 		cloudflare: { apiToken: '…', accountId: '…' },
 		openai: '…',
-		openrouter: '…' // every OpenRouter model, named by its slug
+		openrouter: '…', // every OpenRouter model, named by its slug
+		google: '…' // a Gemini API key, for gemini-decision-1
 	},
 	defaultModel: 'jev',
 	registerUsage: (usage, context: { customerId: string }) => {
@@ -50,11 +51,11 @@ TypeScript enforces the setup:
 - **The model is optional only with a default.** Without `defaultModel`, every call must name one.
 - **Usage context is required when typed.** The type of `registerUsage`'s second parameter is required on every call and passed back to `registerUsage` and `onError`.
 
-A call answers `null` instead of throwing, and `onError` says why: `timeout`, `aborted` (the call's own signal: your own doing, so a logging `onError` may skip it), `unauthorized` (401/403, a bad key), `out-of-credits` (402), `rate-limited` (429 after the retry), `request-failed` (any other status, or a transport error), `request-too-large` (see below), `images-unsupported`, `image-detached` (see [Images](#images)), `unreadable-response` or `answer-mismatch`. Every error carries its `model` and `provider`, `status` when the provider answered, `latencyMs` and `attempts`; a throwing `registerUsage` reports `usage-failed` without failing the call. `fetch` replaces the transport, for example to route calls through your own rate limits, and `defaultSignal` supplies the signal for calls that pass none. A call with no questions answers `{}` without a request. The one throw is a call with no model and no `defaultModel`, which TypeScript already rejects.
+A call answers `null` instead of throwing, and `onError` says why: `timeout`, `aborted` (the call's own signal: your own doing, so a logging `onError` may skip it), `unauthorized` (401/403, or Gemini's 400 for a bad key), `out-of-credits` (402), `rate-limited` (429 after the retry), `request-failed` (any other status, or a transport error), `request-too-large` (see below), `images-unsupported`, `media-unsupported`, `image-detached` (see [Images](#images) and [Video, audio and PDFs](#video-audio-and-pdfs)), `unreadable-response` or `answer-mismatch`. Every error carries its `model` and `provider`, `status` when the provider answered, `latencyMs` and `attempts`; a throwing `registerUsage` reports `usage-failed` without failing the call. `fetch` replaces the transport, for example to route calls through your own rate limits, and `defaultSignal` supplies the signal for calls that pass none. A call with no questions answers `{}` without a request. The one throw is a call with no model and no `defaultModel`, which TypeScript already rejects.
 
 **Timeouts and retries.** `timeoutMs` (default 4 s, per client or per call) bounds the whole call: every attempt, the pause between them and the body read. A status of 429, 500, 502, 503, 504 or 529 and a transport error are retried once, after the provider's `Retry-After` when it asks for 2 s or less and the deadline leaves time for it; otherwise the call fails at once. `attemptTimeoutMs` (off by default) abandons a request that has not answered by then and sends one more while time remains, so a voice turn can set `timeoutMs: 1_200, attemptTimeoutMs: 500` and still get a second try. An abandoned request may still be billed.
 
-**Size.** The state and questions together are measured before sending: past `maxRequestChars` (default `DECISION_MAX_REQUEST_CHARS`, 90k characters, under Jev's ~32.5k-token wall) the call fails with `request-too-large` and nothing is sent. So does a call over its model's `maxQuestions`, `maxChoices` (options in one choice) or `maxLevels` (levels in one score) in `DECISION_MODELS`, and a provider's own token-limit refusal maps to the same kind. Extra questions add next to nothing to latency, but every question's instructions and criteria are billed as input tokens.
+**Size.** The state and questions together are measured before sending: past `maxRequestChars` (default `DECISION_MAX_REQUEST_CHARS`, 90k characters, under Jev's ~32.5k-token wall; `gemini-decision-1` takes 262k tokens, so a client that calls only Gemini can raise it) the call fails with `request-too-large` and nothing is sent. So does a call over its model's `maxQuestions`, `maxChoices` (options in one choice) or `maxLevels` (levels in one score) in `DECISION_MODELS`, and a provider's own token-limit refusal maps to the same kind. Extra questions add next to nothing to latency, but every question's instructions and criteria are billed as input tokens.
 
 ## Usage and errors per call
 
@@ -97,10 +98,10 @@ The single answer types are exported too: `DecisionNoulAnswer`, `DecisionChoiceA
 
 ## Images
 
-`jev` and `typesafe/jev-1.13` read images (`images: true` in `DECISION_MODELS`). Make one with `image()` from PNG or JPEG bytes or base64, and put it anywhere text can go: in the state, as a question's instructions or as a criterion. Inside a sentence, write it into a `withImages` template:
+`jev`, `typesafe/jev-1.13` and `gemini-decision-1` read images (`images: true` in `DECISION_MODELS`). Make one with `image()` from PNG or JPEG bytes or base64, and put it anywhere text can go: in the state, as a question's instructions or as a criterion. Inside a sentence, write it into a `withMedia` template (`withImages` is the same tag under its old name):
 
 ```ts
-import { image, withImages } from 'decision-api'
+import { image, withMedia } from 'decision-api'
 import { readFile } from 'node:fs/promises'
 
 const door = image(await readFile('door-camera.jpg'))
@@ -112,7 +113,7 @@ const answers = await decide({
 	questions: {
 		same: {
 			type: 'noul',
-			instructions: withImages`Is the person in \`door\` the one on this badge: ${badge}?`
+			instructions: withMedia`Is the person in \`door\` the one on this badge: ${badge}?`
 		},
 		gesture: {
 			type: 'choice',
@@ -126,9 +127,47 @@ const answers = await decide({
 
 Each image is sent once, base64-encoded under a unique reference, however often it is used; every use still counts as input tokens. TypeSafe's image preview header is added for you. Put an image several questions use in the state, not in each question's instructions.
 
+- **Gemini takes a detail level.** `image(bytes, { resolution: 'low' })` (`low`, `medium`, `high` or `ultra_high`) trades visual detail for input tokens; TypeSafe ignores it.
 - **TypeScript rejects an image on a model that reads none**, when the image's type is visible in the call. Questions typed as `Record<string, DecisionQuestion>` don't show it, so the call checks as well and answers `null` with `images-unsupported`.
 - **A plain template loses the image.** `` `Same as ${badge}?` `` writes only the reference; the call answers `null` with `image-detached` instead of asking about a bare string.
+- **Gemini reads images in its input only.** Its instructions and criteria take text, so the client sends every image after the state, each under a line naming its reference, and the text that used the image names that reference. An image used as a whole criterion therefore reaches Gemini as a pointer to the image rather than the image in place, so measure such questions with `decision-api/eval` before relying on them.
 - **Prepare images first.** `image()` throws for anything but PNG or JPEG. Jev rejects images, and never resizes them, outside 280 to 1568 px a side or over 16 MiB, and ignores EXIF orientation, so scale and rotate before sending ([limits](https://docs.typesafe.ai/images#limits)). TypeSafe calls images a preview: the format and accuracy may change between Jev releases.
+
+## Video, audio and PDFs
+
+`gemini-decision-1` also reads video, audio and PDFs (`video`, `audio` and `pdf` in `DECISION_MODELS`). Make them with `video()`, `audio()` and `pdf()` and use them as you use images: in the state, the instructions or a criterion, or inside a `withMedia` template.
+
+```ts
+import { audio, pdf, video, withMedia } from 'decision-api'
+import { readFile } from 'node:fs/promises'
+
+const clip = video(await readFile('aisle-4.mp4'), { resolution: 'low' })
+const call = audio({ uri: 'https://example.com/call.ogg', mimeType: 'audio/ogg' })
+const manual = pdf(await readFile('cleaning-manual.pdf'))
+
+const answers = await decide(
+	{
+		state: { clip, call, manual },
+		questions: {
+			spill: { type: 'noul', instructions: 'Does `clip` show a spill?' },
+			next_action: {
+				type: 'choice',
+				instructions: withMedia`What does ${manual} say to do about it?`,
+				criteria: { wipe_with_cloth: '', mop: '', cordon_off: '' }
+			}
+		},
+		customerId: 'c_1',
+		timeoutMs: 15_000
+	},
+	'gemini-decision-1'
+)
+```
+
+- **Bytes, base64 or a URL.** Each takes file bytes, base64 or a `data:` URL, or `{ uri, mimeType }` for an HTTPS URL or a Gemini Files API URI (Gemini fetches up to 15 MB from a URL; inline files may total 100 MB per request, 50 MB for PDFs).
+- **The type comes from the bytes.** MP4, MOV, 3GP, WebM, AVI, FLV, WMV and MPEG video, and WAV, MP3, AAC, Ogg, FLAC, AIFF and WebM audio are recognised; pass `mimeType` for anything else, such as `audio/m4a` or raw `audio/l16`. An unrecognised file throws.
+- **Every kind in the call must be readable.** TypeScript only accepts a model that reads all of them, and a call whose types don't show them answers `null` with `media-unsupported` (or `images-unsupported` for an image) instead of sending.
+- **Allow the time.** Video frames and PDF pages count as image tokens, and a long file takes longer than the default 4 s `timeoutMs`.
+- **They travel like Gemini's images**: in its input after the state, each under its reference (see [Images](#images)).
 
 ## Testing
 

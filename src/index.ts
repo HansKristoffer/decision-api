@@ -9,16 +9,31 @@ export {
 	type DecisionUsage
 } from './create-decision-api.ts'
 export {
+	audio,
+	type DecisionAudio,
 	type DecisionImage,
 	type DecisionImageFormat,
+	type DecisionImageResolution,
 	type DecisionImageText,
+	type DecisionMedia,
+	type DecisionMediaData,
+	type DecisionMediaKind,
+	type DecisionMediaText,
+	type DecisionMediaUri,
+	type DecisionPdf,
 	type DecisionText,
+	type DecisionVideo,
+	type DecisionVideoResolution,
 	image,
-	withImages
-} from './images.ts'
+	pdf,
+	video,
+	withImages,
+	withMedia
+} from './media.ts'
 export {
 	DECISION_MODELS,
 	type DecisionImageModel,
+	type DecisionMediaModel,
 	type DecisionModel,
 	type DecisionProvider,
 	type DecisionProviderKeys,
