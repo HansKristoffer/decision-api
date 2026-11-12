@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.0](https://github.com/HansKristoffer/decision-api/compare/v1.3.0...v2.0.0) (2026-11-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* the error kind state-too-large is now request-too-large and counts the questions as well as the state; the maxStateChars option is now maxRequestChars and DECISION_MAX_STATE_CHARS is now DECISION_MAX_REQUEST_CHARS. timeoutMs now bounds the whole call, retries included, instead of each attempt.
+
+### Features
+
+* attemptTimeoutMs, and a single retry for transport errors and 504 ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* check calls against per-model maxQuestions, maxChoices and maxLevels ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* decide.result() answers usage (with attempts and resolvedModel) or the error (with latencyMs and attempts) ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* decision-api/eval with runCases and a threshold and calibration report ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* decision-api/testing with fakeDecide ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* perItem, and export the single answer types ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+* request-too-large replaces state-too-large and counts questions; maxRequestChars and DECISION_MAX_REQUEST_CHARS replace the state names; timeoutMs bounds the whole call ([a5059dd](https://github.com/HansKristoffer/decision-api/commit/a5059dd52f08f67bd15d9994e679ab8b64486caa))
+
 ## [1.3.0](https://github.com/HansKristoffer/decision-api/compare/v1.2.0...v1.3.0) (2026-11-04)
 
 
