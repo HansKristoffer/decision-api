@@ -11,6 +11,14 @@
 import { mkdir } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import {
+	type CaseLog,
+	type GradedAnswer,
+	mean,
+	percentile,
+	report,
+	runCases
+} from '../src/eval.ts'
+import {
 	createDecisionApi,
 	DECISION_MODELS,
 	type DecisionModel,
@@ -20,50 +28,8 @@ import { BENCH_CASES, type BenchCase } from './cases.ts'
 
 const OUT_DIR = '.artifacts/bench'
 
-type Answer =
-	| { type: 'noul'; noul: number }
-	| { type: 'choice'; choice: string; probabilities: Record<string, number> }
-	| { type: 'score'; score: number; probabilities: Record<string, number> }
-
-type Graded = { value: string; correct: boolean; pCorrect: number }
-
-export type CallLog = {
-	model: DecisionModel
-	caseName: string
-	run: number
-	latencyMs: number
-	costUsd?: number
-	error?: string
-	answers?: Record<string, Graded>
-}
-
-/** Right or wrong, plus the probability the model put on the right answer. */
-export function grade(
-	answer: Answer,
-	expected: boolean | string | number
-): Graded {
-	if (answer.type === 'noul') {
-		const pCorrect = expected ? answer.noul : 1 - answer.noul
-		return {
-			value: answer.noul.toFixed(2),
-			correct: pCorrect >= 0.5,
-			pCorrect
-		}
-	}
-	const pCorrect = answer.probabilities[String(expected)] ?? 0
-	if (answer.type === 'choice') {
-		return {
-			value: answer.choice,
-			correct: answer.choice === expected,
-			pCorrect
-		}
-	}
-	return {
-		value: answer.score.toFixed(2),
-		correct: Math.round(answer.score) === expected,
-		pCorrect
-	}
-}
+export type CallLog = CaseLog
+type Graded = GradedAnswer
 
 function keysFromEnv(): DecisionProviderKeys {
 	const env = process.env
@@ -91,65 +57,18 @@ export async function runBench(input: {
 	const decide = createDecisionApi({
 		// Only models whose key is present are passed in `models`.
 		keys: input.keys as Required<DecisionProviderKeys>,
-		timeoutMs: 15_000,
-		registerUsage: (usage, context: { log: CallLog }) => {
-			context.log.costUsd = usage.costUsd
-		},
-		onError: (error, context) => {
-			context.log.error = `${error.kind}: ${error.message}`
-		}
+		timeoutMs: 15_000
 	})
-	const cases = input.cases ?? BENCH_CASES
-
-	// Models run side by side (separate providers); each model's own calls run
-	// one at a time so they never queue behind each other.
-	const perModel = await Promise.all(
-		input.models.map(async (model) => {
-			const logs: CallLog[] = []
-			for (let run = 1; run <= input.runs; run++) {
-				for (const benchCase of cases) {
-					const log: CallLog = {
-						model,
-						caseName: benchCase.name,
-						run,
-						latencyMs: 0
-					}
-					const startedAt = performance.now()
-					const answers = await decide(
-						{ state: benchCase.state, questions: benchCase.questions, log },
-						model
-					)
-					log.latencyMs = Math.round(performance.now() - startedAt)
-					if (answers) {
-						log.answers = Object.fromEntries(
-							Object.entries(benchCase.expected).map(([key, expected]) => [
-								key,
-								grade(answers[key] as Answer, expected)
-							])
-						)
-					}
-					input.onCall?.(log)
-					logs.push(log)
-				}
-			}
-			return logs
-		})
-	)
-	return perModel.flat()
+	return runCases({
+		decide,
+		cases: input.cases ?? BENCH_CASES,
+		runs: input.runs,
+		models: input.models,
+		onCall: input.onCall
+	})
 }
 
 // ───────────────────────────────── Report ──────────────────────────────────
-
-function percentile(values: number[], p: number) {
-	if (values.length === 0) return Number.NaN
-	const sorted = [...values].sort((a, b) => a - b)
-	return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] as number
-}
-
-const mean = (values: number[]) =>
-	values.length === 0
-		? Number.NaN
-		: values.reduce((sum, value) => sum + value, 0) / values.length
 
 function summarize(model: DecisionModel, logs: CallLog[]) {
 	const own = logs.filter((log) => log.model === model)
@@ -438,6 +357,13 @@ if (import.meta.main) {
 			points: `${row.points.toFixed(1)} / ${row.maxPoints}`,
 			'p(correct)': pct(row.pCorrect),
 			'latency p50': ms(row.p50)
+		}))
+	)
+	console.log('\nCalibration (nouls; Brier 0 is perfect, 0.25 a coin)')
+	console.table(
+		report(logs).models.map((row) => ({
+			model: row.model,
+			brier: Number(row.brier.toFixed(3))
 		}))
 	)
 	console.log(`\nReport: ${OUT_DIR}/report.html`)

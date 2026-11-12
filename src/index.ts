@@ -1,10 +1,11 @@
 export {
 	createDecisionApi,
-	DECISION_MAX_STATE_CHARS,
+	DECISION_MAX_REQUEST_CHARS,
 	type DecisionApi,
 	DecisionError,
 	type DecisionErrorKind,
 	type DecisionFetch,
+	type DecisionResult,
 	type DecisionUsage
 } from './create-decision-api.ts'
 export {
@@ -23,10 +24,15 @@ export {
 	type DecisionProviderKeys,
 	type ModelsFor
 } from './models.ts'
-export type {
-	DecisionAnswers,
-	DecisionChoice,
-	DecisionNoul,
-	DecisionQuestion,
-	DecisionScore
+export {
+	type DecisionAnswer,
+	type DecisionAnswers,
+	type DecisionChoice,
+	type DecisionChoiceAnswer,
+	type DecisionNoul,
+	type DecisionNoulAnswer,
+	type DecisionQuestion,
+	type DecisionScore,
+	type DecisionScoreAnswer,
+	perItem
 } from './questions.ts'
