@@ -6,7 +6,7 @@
 //
 // Keys come from the environment; copy `.env.example` to `.env` (Bun reads it):
 // TYPESAFE_API_KEY, CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID, OPENAI_API_KEY,
-// OPENROUTER_API_KEY (every OpenRouter model in DECISION_MODELS).
+// OPENROUTER_API_KEY (every OpenRouter model in DECISION_MODELS), GEMINI_API_KEY.
 
 import { mkdir } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
@@ -37,6 +37,7 @@ function keysFromEnv(): DecisionProviderKeys {
 		typesafe: env.TYPESAFE_API_KEY,
 		openai: env.OPENAI_API_KEY,
 		openrouter: env.OPENROUTER_API_KEY,
+		google: env.GEMINI_API_KEY,
 		cloudflare:
 			env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID
 				? {

@@ -3,7 +3,12 @@
 // (`questions.ts`).
 
 import { z } from 'zod'
-import { type DecisionImage, toAssets } from './images.ts'
+import {
+	DecisionImage,
+	type DecisionMedia,
+	type DecisionMediaKind,
+	toAssets
+} from './media.ts'
 import {
 	type DecisionQuestion,
 	type DecisionResponse,
@@ -17,6 +22,8 @@ export type DecisionProviderKeys = {
 	openai?: string
 	/** One key for every model OpenRouter hosts (the `vendor/model` names). */
 	openrouter?: string
+	/** A Gemini API key: https://aistudio.google.com/api-keys */
+	google?: string
 }
 
 export type DecisionProvider = keyof DecisionProviderKeys
@@ -28,16 +35,20 @@ export type DecisionProvider = keyof DecisionProviderKeys
  * price sheet); the rest are the providers' list prices (2026-10). Images are
  * billed as input tokens at the same rate.
  *
- * `images` marks the models this client sends images to. Jev reads them
+ * `images` marks the models this client sends images to, and `video`,
+ * `audio` and `pdf` the models it sends those files to. Jev reads images
  * anywhere in the state, instructions and criteria (1.13 and later:
- * https://docs.typesafe.ai/images). Clef and gpt-6-luna read images too, but
- * in wire formats this client does not speak yet.
+ * https://docs.typesafe.ai/images); Gemini reads every kind, in its input
+ * only, so the client sends files there and the text names them. Clef and
+ * gpt-6-luna read images too, but in wire formats this client does not speak
+ * yet.
  *
  * `maxQuestions`, `maxChoices` (options in one choice) and `maxLevels` (levels
  * in one score) are the limits a call is checked against before it is sent,
  * where a provider documents or was measured to enforce one. Jev's come from
  * its API schema (https://docs.typesafe.ai/api); Clef's question limit was
- * measured (it refuses more than 64).
+ * measured (it refuses more than 64). Gemini's are from its API reference
+ * (https://aistudio.google.com/docs/decisions-api).
  */
 export const DECISION_MODELS = {
 	jev: {
@@ -75,6 +86,19 @@ export const DECISION_MODELS = {
 		images: true,
 		maxChoices: 255,
 		maxLevels: 10
+	},
+	// Google's Gemini Decision 1 on the Gemini Developer API (v1beta), list
+	// price from the launch post (2026-11-11).
+	'gemini-decision-1': {
+		provider: 'google',
+		inputUsdPerMTok: 0.1,
+		images: true,
+		video: true,
+		audio: true,
+		pdf: true,
+		maxQuestions: 1000,
+		maxChoices: 255,
+		maxLevels: 255
 	}
 } as const satisfies Record<string, DecisionModelInfo>
 
@@ -82,6 +106,9 @@ type DecisionModelInfo = {
 	provider: DecisionProvider
 	inputUsdPerMTok: number
 	images: boolean
+	video?: boolean
+	audio?: boolean
+	pdf?: boolean
 	maxQuestions?: number
 	maxChoices?: number
 	maxLevels?: number
@@ -89,12 +116,30 @@ type DecisionModelInfo = {
 
 export type DecisionModel = keyof typeof DECISION_MODELS
 
-/** The models that read images. */
-export type DecisionImageModel = {
-	[Model in DecisionModel]: (typeof DECISION_MODELS)[Model]['images'] extends true
+/** The flag in `DECISION_MODELS` that says a model reads each kind of file. */
+const MEDIA_FLAGS = {
+	image: 'images',
+	video: 'video',
+	audio: 'audio',
+	pdf: 'pdf'
+} as const satisfies Record<DecisionMediaKind, keyof DecisionModelInfo>
+
+/** The models that read every kind of file in `Kind`. */
+export type DecisionMediaModel<Kind extends DecisionMediaKind> = {
+	[Model in DecisionModel]: (typeof DECISION_MODELS)[Model] extends {
+		[Flag in (typeof MEDIA_FLAGS)[Kind]]: true
+	}
 		? Model
 		: never
 }[DecisionModel]
+
+/** The models that read images. */
+export type DecisionImageModel = DecisionMediaModel<'image'>
+
+export function readsMedia(model: DecisionModel, kind: DecisionMediaKind) {
+	const info: DecisionModelInfo = DECISION_MODELS[model]
+	return info[MEDIA_FLAGS[kind]] === true
+}
 
 type ModelsOf<Provider> = {
 	[Model in DecisionModel]: (typeof DECISION_MODELS)[Model]['provider'] extends Provider
@@ -137,8 +182,8 @@ export function overModelLimit(
 type RequestInput = {
 	state: unknown
 	questions: Record<string, DecisionQuestion>
-	/** Sent only to models with `images: true`; the caller checks. */
-	images: DecisionImage[]
+	/** Sent only to models that read their kinds (`readsMedia`); the caller checks. */
+	media: DecisionMedia[]
 }
 
 /** One POST: where it goes, and the headers and body it carries. */
@@ -148,14 +193,16 @@ export function buildDecisionRequest(
 	keys: DecisionProviderKeys
 ) {
 	const provider = DECISION_MODELS[model].provider
-	const headers = (token: string | undefined) => {
+	const required = (token: string | undefined) => {
 		if (!token) throw new Error(`No ${provider} key for ${model}`)
-		return {
-			authorization: `Bearer ${token}`,
-			'content-type': 'application/json'
-		}
+		return token
 	}
-	const { state, questions, images } = input
+	const headers = (token: string | undefined) => ({
+		authorization: `Bearer ${required(token)}`,
+		'content-type': 'application/json'
+	})
+	const { state, questions } = input
+	const images = input.media.filter((item) => item instanceof DecisionImage)
 	// A text-only request goes out exactly as it did before images existed.
 	const assets = images.length > 0 ? { assets: toAssets(images) } : {}
 
@@ -190,6 +237,17 @@ export function buildDecisionRequest(
 			url: 'https://openrouter.ai/api/alpha/decisions',
 			headers: headers(keys.openrouter),
 			body: JSON.stringify({ state, questions, ...assets, model })
+		}
+	}
+
+	if (provider === 'google') {
+		return {
+			url: 'https://generativelanguage.googleapis.com/v1beta/decisions',
+			headers: {
+				'x-goog-api-key': required(keys.google),
+				'content-type': 'application/json'
+			},
+			body: JSON.stringify(toGeminiRequest(model, input))
 		}
 	}
 
@@ -247,7 +305,7 @@ function toOpenAiQuestion(name: string, question: DecisionQuestion) {
 
 function toOpenAiRequest(
 	model: DecisionModel,
-	input: Omit<RequestInput, 'images'>
+	input: Omit<RequestInput, 'media'>
 ) {
 	return {
 		model,
@@ -332,6 +390,84 @@ function fromOpenAiResponse(
 	}
 }
 
+// ───────────────────────────── Gemini Decisions ─────────────────────────────
+// https://aistudio.google.com/docs/decisions-api - System One's question and
+// answer shapes, except that a noul's criteria are named `true_description` and
+// `false_description`, the state is `input` (text or content blocks) and usage
+// counts `total_input_tokens`. Instructions and criteria take text only, so
+// every file goes into `input` after the state, each under a line naming its
+// reference, which is what the state, instructions and criteria write.
+
+const GEMINI_BLOCK_TYPES = {
+	image: 'image',
+	video: 'video',
+	audio: 'audio',
+	pdf: 'document'
+} as const satisfies Record<DecisionMediaKind, string>
+
+function toGeminiBlock(item: DecisionMedia) {
+	return {
+		type: GEMINI_BLOCK_TYPES[item.kind],
+		...(item.uri === undefined ? { data: item.base64 } : { uri: item.uri }),
+		mime_type: item.mimeType,
+		...(item.resolution !== undefined && { resolution: item.resolution })
+	}
+}
+
+function toGeminiQuestion(question: DecisionQuestion) {
+	if (question.type !== 'noul' || !question.criteria) return question
+	return {
+		...question,
+		criteria: {
+			true_description: question.criteria.true,
+			false_description: question.criteria.false
+		}
+	}
+}
+
+function toGeminiRequest(model: DecisionModel, input: RequestInput) {
+	const text =
+		typeof input.state === 'string' ? input.state : JSON.stringify(input.state)
+	return {
+		model,
+		input:
+			input.media.length === 0
+				? text
+				: [
+						{ type: 'text', text },
+						// Gemini joins adjacent text blocks with no separator.
+						...input.media.flatMap((item) => [
+							{ type: 'text', text: `\n\n${item.reference}:\n` },
+							toGeminiBlock(item)
+						])
+					],
+		questions: Object.fromEntries(
+			Object.entries(input.questions).map(([key, question]) => [
+				key,
+				toGeminiQuestion(question)
+			])
+		)
+	}
+}
+
+// Answers pass through as they are: the extra `confidence` on a noul and
+// `legend` on a score are dropped by the shared schema.
+const GeminiResponseSchema = z
+	.object({
+		answers: z.record(z.string(), z.unknown()),
+		usage: z.object({
+			total_input_tokens: z.number(),
+			total_output_tokens: z.number()
+		})
+	})
+	.transform(({ answers, usage }) => ({
+		answers,
+		usage: {
+			input_tokens: usage.total_input_tokens,
+			output_tokens: usage.total_output_tokens
+		}
+	}))
+
 const responseSchemas: Record<DecisionProvider, z.ZodType<DecisionResponse>> = {
 	typesafe: DecisionResponseSchema,
 	// OpenRouter's Decisions API speaks System One's shape for every model.
@@ -342,5 +478,6 @@ const responseSchemas: Record<DecisionProvider, z.ZodType<DecisionResponse>> = {
 		.transform((response) => response.result),
 	openai: OpenAiResponseSchema.transform(fromOpenAiResponse).pipe(
 		DecisionResponseSchema
-	)
+	),
+	google: GeminiResponseSchema.pipe(DecisionResponseSchema)
 }

@@ -4,7 +4,7 @@
 // images (`DecisionText`) on the models that read them.
 
 import { z } from 'zod'
-import type { DecisionText } from './images.ts'
+import type { DecisionText } from './media.ts'
 
 /** Probability that the condition holds. No separate confidence: this IS it. */
 export type DecisionNoul = {

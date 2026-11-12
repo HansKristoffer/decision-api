@@ -1,20 +1,22 @@
 import {
-	collectImages,
-	type DecisionImage,
-	type DecisionImageText,
+	collectMedia,
+	type DecisionMedia,
+	type DecisionMediaKind,
+	type DecisionMediaText,
 	type DecisionText,
 	detachedReference
-} from './images.ts'
+} from './media.ts'
 import {
 	buildDecisionRequest,
 	DECISION_MODELS,
-	type DecisionImageModel,
+	type DecisionMediaModel,
 	type DecisionModel,
 	type DecisionProvider,
 	type DecisionProviderKeys,
 	type ModelsFor,
 	overModelLimit,
-	readDecisionResponse
+	readDecisionResponse,
+	readsMedia
 } from './models.ts'
 import {
 	type DecisionAnswers,
@@ -74,7 +76,9 @@ export type DecisionErrorKind =
 	| 'request-too-large'
 	/** The call holds an image and the model reads none (`images: false`). */
 	| 'images-unsupported'
-	/** An image's reference is in the text without the image: build that text with `withImages`. */
+	/** The call holds a video, audio or a PDF and the model does not read that kind. */
+	| 'media-unsupported'
+	/** A file's reference is in the text without the file: build that text with `withMedia`. */
 	| 'image-detached'
 	/** No answer within `timeoutMs`, retries included. */
 	| 'timeout'
@@ -83,7 +87,10 @@ export type DecisionErrorKind =
 	 * doing, which an `onError` that logs failures may want to skip.
 	 */
 	| 'aborted'
-	/** 401 or 403: the provider rejected the key. Retrying will not help. */
+	/**
+	 * 401 or 403, or Gemini's 400 for a key that is not valid: the provider
+	 * rejected the key. Retrying will not help.
+	 */
 	| 'unauthorized'
 	/** 402: the provider's account is out of credits. Retrying will not help. */
 	| 'out-of-credits'
@@ -137,7 +144,7 @@ export type DecisionFetch = (
 type DecisionCall<Q extends Record<string, DecisionQuestion>, State> = {
 	/**
 	 * A string, or named fields - name them when the state has several parts.
-	 * Images go in as values, on models that read them.
+	 * Images, video, audio and PDFs go in as values, on models that read them.
 	 */
 	state: State
 	questions: Q
@@ -224,44 +231,43 @@ type DecisionModelArgument<
 	Default,
 	Q,
 	State
-> = ModelArgument<
-	HasImage<State> extends true
-		? Extract<Model, DecisionImageModel>
-		: HasImage<Q> extends true
-			? Extract<Model, DecisionImageModel>
-			: Model,
-	Default
->
+> = ModelArgument<ModelsReading<Model, MediaIn<State> | MediaIn<Q>>, Default>
+
+/** The models that read every kind of file a call holds; all of them for none. */
+type ModelsReading<Model, Kinds extends DecisionMediaKind> = [Kinds] extends [
+	never
+]
+	? Model
+	: Extract<Model, DecisionMediaModel<Kinds>>
 
 type ModelArgument<Model, Default> = [Default] extends [Model]
 	? [model?: Model]
 	: [model: Model]
 
 /**
- * Whether a call's state or questions hold an image, as far as their types
+ * The kinds of file a call's state or questions hold, as far as their types
  * tell: a value typed as any text (`DecisionText`, `unknown`, `any`) does not
  * say, and the call checks it instead. Stops at a few levels deep, so a
  * recursive JSON type cannot recurse forever.
  */
-type HasImage<T, Depth extends unknown[] = []> = 0 extends 1 & T
-	? false
+type MediaIn<T, Depth extends unknown[] = []> = 0 extends 1 & T
+	? never
 	: [DecisionText] extends [T]
-		? false
+		? never
 		: Depth['length'] extends 6
-			? false
-			: true extends ImageIn<T, [...Depth, unknown]>
-				? true
-				: false
+			? never
+			: MediaOf<T, [...Depth, unknown]>
 
-type ImageIn<T, Depth extends unknown[]> = T extends
-	| DecisionImage
-	| DecisionImageText
-	? true
-	: T extends readonly (infer Item)[]
-		? HasImage<Item, Depth>
-		: T extends object
-			? { [K in keyof T]-?: HasImage<T[K], Depth> }[keyof T]
-			: false
+type MediaOf<T, Depth extends unknown[]> =
+	T extends DecisionMedia<infer Kind>
+		? Kind
+		: T extends DecisionMediaText<infer Kind>
+			? Kind
+			: T extends readonly (infer Item)[]
+				? MediaIn<Item, Depth>
+				: T extends object
+					? { [K in keyof T]-?: MediaIn<T[K], Depth> }[keyof T]
+					: never
 
 export function createDecisionApi<
 	const Keys extends DecisionProviderKeys,
@@ -312,16 +318,22 @@ export function createDecisionApi<
 		const overLimit = overModelLimit(model, questions)
 		if (overLimit) return fail('request-too-large', overLimit)
 
-		const images = collectImages(questions, collectImages(state))
-		const detached = detachedReference(stateText + questionsText, images)
+		const media = collectMedia(questions, collectMedia(state))
+		const detached = detachedReference(stateText + questionsText, media)
 		if (detached) {
 			return fail(
 				'image-detached',
-				`${detached} is in the text without its image; write that text with withImages`
+				`${detached} is in the text without its file; write that text with withMedia`
 			)
 		}
-		if (images.size > 0 && !DECISION_MODELS[model].images) {
+		const unread = [...media.values()].find(
+			(item) => !readsMedia(model, item.kind)
+		)
+		if (unread?.kind === 'image') {
 			return fail('images-unsupported', `${model} does not read images`)
+		}
+		if (unread) {
+			return fail('media-unsupported', `${model} does not read ${unread.kind}`)
 		}
 
 		const startedAt = Date.now()
@@ -332,7 +344,7 @@ export function createDecisionApi<
 				model,
 				request: buildDecisionRequest(
 					model,
-					{ state, questions, images: [...images.values()] },
+					{ state, questions, media: [...media.values()] },
 					options.keys
 				),
 				signal: signal ?? options.defaultSignal?.(),
@@ -531,6 +543,10 @@ async function postWithRetry(input: {
 function kindOf(status: number, body: string): DecisionErrorKind {
 	if (status === 413 || (status === 400 && /max_tokens_exceeded/.test(body))) {
 		return 'request-too-large'
+	}
+	// Gemini answers a bad key with 400 rather than 401.
+	if (status === 400 && /API key not valid|API_KEY_INVALID/.test(body)) {
+		return 'unauthorized'
 	}
 	return KIND_BY_STATUS[status] ?? 'request-failed'
 }
