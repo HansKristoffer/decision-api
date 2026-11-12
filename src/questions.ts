@@ -32,22 +32,27 @@ export type DecisionScore = {
 
 export type DecisionQuestion = DecisionNoul | DecisionChoice | DecisionScore
 
-type DecisionNoulAnswer = { type: 'noul'; noul: number }
-type DecisionChoiceAnswer<Option extends string = string> = {
+export type DecisionNoulAnswer = { type: 'noul'; noul: number }
+export type DecisionChoiceAnswer<Option extends string = string> = {
 	type: 'choice'
 	choice: Option
 	confidence: number
 	probabilities: Record<Option, number>
 }
-type DecisionScoreAnswer = {
+export type DecisionScoreAnswer = {
 	type: 'score'
 	score: number
 	confidence: number
 	probabilities: Record<string, number>
 }
 
+export type DecisionAnswer =
+	| DecisionNoulAnswer
+	| DecisionChoiceAnswer
+	| DecisionScoreAnswer
+
 /** The answer a given question shape produces, so call sites need no casts. */
-type AnswerFor<Q> = Q extends { type: 'noul' }
+export type AnswerFor<Q> = Q extends { type: 'noul' }
 	? DecisionNoulAnswer
 	: Q extends {
 				type: 'choice'
@@ -82,6 +87,8 @@ const AnswerSchema = z.discriminatedUnion('type', [
 
 /** What every vendor's response is read into. */
 export const DecisionResponseSchema = z.object({
+	/** The model that answered, when the provider says (it may resolve an alias). */
+	model: z.string().optional(),
 	answers: z.record(z.string(), AnswerSchema),
 	usage: z.object({
 		input_tokens: z.number().int().nonnegative(),
@@ -94,7 +101,7 @@ export type DecisionResponse = z.infer<typeof DecisionResponseSchema>
 /** The contract depends on the question, not just the answer's own tag. */
 export function matchesQuestion(
 	question: DecisionQuestion,
-	answer: z.infer<typeof AnswerSchema> | undefined
+	answer: DecisionAnswer | undefined
 ) {
 	if (!answer || answer.type !== question.type) return false
 	if (question.type === 'noul') return true
@@ -130,4 +137,34 @@ function matchesOptions(
 		Object.keys(probabilities).length === options.length &&
 		options.every((option) => Object.hasOwn(probabilities, option))
 	)
+}
+
+/**
+ * The same question about each item of a list, under keys `${prefix}_${index}`.
+ * Spread `questions` into a call (next to other questions if you like) and
+ * pass its answers to `read`, which pairs each item with its typed answer.
+ */
+export function perItem<
+	Item,
+	const Q extends DecisionQuestion,
+	const Prefix extends string
+>(
+	items: readonly Item[],
+	prefix: Prefix,
+	ask: (item: Item, index: number) => Q
+) {
+	type Key = `${Prefix}_${number}`
+	const questions = Object.fromEntries(
+		items.map((item, index) => [`${prefix}_${index}`, ask(item, index)])
+	) as Record<Key, Q>
+	return {
+		questions,
+		/** Every key is there: a call answers all its questions or `null`. */
+		read: (answers: { readonly [K in Key]: AnswerFor<Q> }) =>
+			items.map((item, index) => ({
+				item,
+				index,
+				answer: answers[`${prefix}_${index}`] as AnswerFor<Q>
+			}))
+	}
 }

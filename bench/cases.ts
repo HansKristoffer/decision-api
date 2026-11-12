@@ -3,14 +3,10 @@
 // a noul by whether it lands on the right side of 0.5, a choice by its pick,
 // a score by its nearest level.
 
+import type { DecisionCase } from '../src/eval.ts'
 import type { DecisionQuestion } from '../src/index.ts'
 
-export type BenchCase = {
-	name: string
-	state: unknown
-	questions: Record<string, DecisionQuestion>
-	expected: Record<string, boolean | string | number>
-}
+export type BenchCase = DecisionCase
 
 const TEAM = {
 	type: 'choice',

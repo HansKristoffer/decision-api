@@ -32,10 +32,27 @@ export type DecisionProvider = keyof DecisionProviderKeys
  * anywhere in the state, instructions and criteria (1.13 and later:
  * https://docs.typesafe.ai/images). Clef and gpt-6-luna read images too, but
  * in wire formats this client does not speak yet.
+ *
+ * `maxQuestions`, `maxChoices` (options in one choice) and `maxLevels` (levels
+ * in one score) are the limits a call is checked against before it is sent,
+ * where a provider documents or was measured to enforce one. Jev's come from
+ * its API schema (https://docs.typesafe.ai/api); Clef's question limit was
+ * measured (it refuses more than 64).
  */
 export const DECISION_MODELS = {
-	jev: { provider: 'typesafe', inputUsdPerMTok: 0.042, images: true },
-	clef: { provider: 'cloudflare', inputUsdPerMTok: 0.24, images: false },
+	jev: {
+		provider: 'typesafe',
+		inputUsdPerMTok: 0.042,
+		images: true,
+		maxChoices: 255,
+		maxLevels: 10
+	},
+	clef: {
+		provider: 'cloudflare',
+		inputUsdPerMTok: 0.24,
+		images: false,
+		maxQuestions: 64
+	},
 	'clef-flash': {
 		provider: 'cloudflare',
 		inputUsdPerMTok: 0.09,
@@ -55,12 +72,20 @@ export const DECISION_MODELS = {
 	'typesafe/jev-1.13': {
 		provider: 'openrouter',
 		inputUsdPerMTok: 0.042,
-		images: true
+		images: true,
+		maxChoices: 255,
+		maxLevels: 10
 	}
-} as const satisfies Record<
-	string,
-	{ provider: DecisionProvider; inputUsdPerMTok: number; images: boolean }
->
+} as const satisfies Record<string, DecisionModelInfo>
+
+type DecisionModelInfo = {
+	provider: DecisionProvider
+	inputUsdPerMTok: number
+	images: boolean
+	maxQuestions?: number
+	maxChoices?: number
+	maxLevels?: number
+}
 
 export type DecisionModel = keyof typeof DECISION_MODELS
 
@@ -85,6 +110,29 @@ export type ModelsFor<Keys extends DecisionProviderKeys> = ModelsOf<
 			: Provider
 	}[keyof Keys]
 >
+
+/** Why a model would refuse these questions, or undefined when it takes them. */
+export function overModelLimit(
+	model: DecisionModel,
+	questions: Record<string, DecisionQuestion>
+): string | undefined {
+	const limits: DecisionModelInfo = DECISION_MODELS[model]
+	const count = Object.keys(questions).length
+	if (limits.maxQuestions !== undefined && count > limits.maxQuestions) {
+		return `${count} questions, over ${model}'s ${limits.maxQuestions}`
+	}
+	for (const [key, question] of Object.entries(questions)) {
+		if (question.type === 'noul') continue
+		const [size, limit, what] =
+			question.type === 'choice'
+				? [Object.keys(question.criteria).length, limits.maxChoices, 'options']
+				: [question.criteria.length, limits.maxLevels, 'levels']
+		if (limit !== undefined && size > limit) {
+			return `"${key}" has ${size} ${what}, over ${model}'s ${limit}`
+		}
+	}
+	return undefined
+}
 
 type RequestInput = {
 	state: unknown
@@ -221,6 +269,7 @@ const OpenAiProbabilitiesSchema = z.array(
 )
 
 const OpenAiResponseSchema = z.object({
+	model: z.string().optional(),
 	answers: z.array(
 		z.discriminatedUnion('type', [
 			z.object({
@@ -274,6 +323,7 @@ function fromOpenAiResponse(
 	})
 
 	return {
+		model: response.model,
 		answers: Object.fromEntries(answers),
 		usage: {
 			input_tokens: response.usage.input_tokens,

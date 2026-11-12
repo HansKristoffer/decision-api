@@ -36,6 +36,11 @@ try {
 		const { createDecisionApi } = await import(${JSON.stringify(pkg.name)})
 		const decide = createDecisionApi({ keys: { openai: 'key' }, defaultModel: 'gpt-6-luna' })
 		if (JSON.stringify(await decide({ state: '', questions: {} })) !== '{}') process.exit(1)
+		const { fakeDecide } = await import(${JSON.stringify(pkg.name + '/testing')})
+		const { report, runCases } = await import(${JSON.stringify(pkg.name + '/eval')})
+		const fake = fakeDecide(() => ({ refund: 0.9 }))
+		const cases = [{ name: 'one', state: '', questions: { refund: { type: 'noul', instructions: 'Refund?' } }, expected: { refund: true } }]
+		if (!report(await runCases({ decide: fake, cases })).ok) process.exit(1)
 	`], { cwd: temporary, stdio: 'inherit', timeout: 30_000 })
 
 	// The types are the product: a strict Node consumer must resolve them and
@@ -45,6 +50,12 @@ try {
 		const decide = createDecisionApi({ keys: { openai: 'key' }, defaultModel: 'gpt-6-luna' })
 		const answers = await decide({ state: '', questions: { refund: { type: 'noul', instructions: 'Refund?' } } })
 		const refund: number | undefined = answers?.refund.noul
+		const outcome = await decide.result({ state: '', questions: {} })
+		if (outcome.ok) outcome.usage?.attempts
+		import { fakeDecide } from ${JSON.stringify(pkg.name + '/testing')}
+		import { runCases } from ${JSON.stringify(pkg.name + '/eval')}
+		const fake = fakeDecide<typeof decide>(() => null)
+		await runCases({ decide: fake, cases: [] })
 		// @ts-expect-error jev needs a TypeSafe key
 		createDecisionApi({ keys: { openai: 'key' }, defaultModel: 'jev' })
 	`)

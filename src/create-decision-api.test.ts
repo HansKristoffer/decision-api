@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test'
 import {
 	createDecisionApi,
-	DECISION_MAX_STATE_CHARS,
+	DECISION_MAX_REQUEST_CHARS,
 	type DecisionError,
 	type DecisionQuestion,
 	type DecisionUsage
@@ -34,6 +34,20 @@ function mockFetch(
 
 const answered = (answers: unknown) =>
 	Response.json({ answers, usage: { input_tokens: 100, output_tokens: 3 } })
+
+function decideReporting(options: {
+	defaultSignal?: () => AbortSignal
+	attemptTimeoutMs?: number
+}) {
+	const onError = mock((_error: DecisionError, _context: object) => {})
+	const decideWith = createDecisionApi({
+		keys: { typesafe: 'key', cloudflare: KEYS.cloudflare },
+		defaultModel: 'jev',
+		onError,
+		...options
+	})
+	return { decideWith, onError }
+}
 
 afterEach(() => {
 	spyOn(globalThis, 'fetch').mockRestore()
@@ -459,19 +473,74 @@ test.each([
 	expect(await decide({ ...ASK, questions: SCORE_QUESTION })).toBeNull()
 })
 
-test('state past the measured wall never leaves the process', async () => {
+test('a request past the measured wall never leaves the process', async () => {
 	const spy = mockFetch(() => answered({ refund: { type: 'noul', noul: 1 } }))
-
-	const answers = await decide({
-		...ASK,
-		state: 'x'.repeat(DECISION_MAX_STATE_CHARS + 1),
-		questions: QUESTIONS
-	})
+	const { decideWith, onError } = decideReporting({})
 
 	// The API answers 400 past ~32.5k tokens (probe G4); paying for that round
 	// trip to learn it buys nothing.
-	expect(answers).toBeNull()
+	expect(
+		await decideWith({
+			...ASK,
+			state: 'x'.repeat(DECISION_MAX_REQUEST_CHARS + 1),
+			questions: QUESTIONS
+		})
+	).toBeNull()
+	// Questions are billed input too: a small state with many long ones is over as well.
+	const questions = Object.fromEntries(
+		Array.from({ length: 100 }, (_, index) => [
+			`q${index}`,
+			{ type: 'noul' as const, instructions: 'x'.repeat(1_000) }
+		])
+	)
+	expect(await decideWith({ ...ASK, questions })).toBeNull()
+
 	expect(spy).not.toHaveBeenCalled()
+	expect(onError.mock.calls.map(([error]) => error.kind)).toEqual([
+		'request-too-large',
+		'request-too-large'
+	])
+})
+
+test('a call over its model limits never leaves the process', async () => {
+	const spy = mockFetch(() => answered({}))
+	const { decideWith, onError } = decideReporting({})
+	const many = Object.fromEntries(
+		Array.from({ length: 65 }, (_, index) => [
+			`q${index}`,
+			{ type: 'noul' as const, instructions: 'Refund?' }
+		])
+	)
+	const options = Object.fromEntries(
+		Array.from({ length: 256 }, (_, index) => [`o${index}`, 'An option'])
+	)
+
+	await decideWith({ ...ASK, questions: many }, 'clef')
+	await decideWith({
+		...ASK,
+		questions: {
+			team: { type: 'choice', instructions: 'Which?', criteria: options }
+		}
+	})
+
+	expect(spy).not.toHaveBeenCalled()
+	expect(onError.mock.calls.map(([error]) => error.message)).toEqual([
+		"65 questions, over clef's 64",
+		`"team" has 256 options, over jev's 255`
+	])
+})
+
+test('a provider refusing the token count is request-too-large', async () => {
+	mockFetch(
+		() => new Response('{"detail":"max_tokens_exceeded"}', { status: 400 })
+	)
+	const { decideWith, onError } = decideReporting({})
+
+	await decideWith({ ...ASK, questions: QUESTIONS })
+	expect(onError.mock.calls[0]?.[0]).toMatchObject({
+		kind: 'request-too-large',
+		status: 400
+	})
 })
 
 test('no questions is not a request, and answers nothing', async () => {
@@ -564,17 +633,6 @@ test('a call without a signal uses the default signal', async () => {
 	expect(await decideInOperation({ ...ASK, questions: QUESTIONS })).toBeNull()
 })
 
-function decideReporting(options: { defaultSignal?: () => AbortSignal }) {
-	const onError = mock((_error: DecisionError, _context: object) => {})
-	const decideWith = createDecisionApi({
-		keys: { typesafe: 'key' },
-		defaultModel: 'jev',
-		onError,
-		...options
-	})
-	return { decideWith, onError }
-}
-
 test.each([
 	[402, 'out-of-credits'],
 	[401, 'unauthorized'],
@@ -617,16 +675,39 @@ test('a 429 that outlasts the retry is rate-limited', async () => {
 	})
 })
 
-test('a transport error has no status', async () => {
-	mockFetch(() => {
+test('a transport error is retried once, and has no status', async () => {
+	const spy = mockFetch(() => {
 		throw new TypeError('fetch failed')
 	})
 	const { decideWith, onError } = decideReporting({})
 
 	await decideWith({ ...ASK, questions: QUESTIONS })
 	const error = onError.mock.calls[0]?.[0]
+	expect(spy).toHaveBeenCalledTimes(2)
 	expect(error?.kind).toBe('request-failed')
 	expect(error?.status).toBeUndefined()
+	expect(error?.attempts).toBe(2)
+})
+
+test('a transport error then an answer succeeds', async () => {
+	mockFetch((_init, attempt) => {
+		if (attempt === 0) throw new TypeError('fetch failed')
+		return answered({ refund: { type: 'noul', noul: 0.5 } })
+	})
+
+	const outcome = await decide.result({ ...ASK, questions: QUESTIONS })
+	expect(outcome.ok && outcome.usage?.attempts).toBe(2)
+})
+
+test('a 504 is retried', async () => {
+	const spy = mockFetch((_init, attempt) =>
+		attempt === 0
+			? new Response('gateway', { status: 504 })
+			: answered({ refund: { type: 'noul', noul: 0.5 } })
+	)
+
+	expect(await decide({ ...ASK, questions: QUESTIONS })).not.toBeNull()
+	expect(spy).toHaveBeenCalledTimes(2)
 })
 
 test('a body that is not JSON is unreadable, not a failed request', async () => {
@@ -683,6 +764,139 @@ test('a call leaves no listener on a long-lived signal', async () => {
 	expect(listeners).toBe(0)
 })
 
+/** A provider that never answers: it rejects only once its signal gives up. */
+const hang = (init: RequestInit | undefined) =>
+	new Promise<Response>((_resolve, reject) =>
+		init?.signal?.addEventListener('abort', () =>
+			reject(new DOMException('aborted', 'AbortError'))
+		)
+	) as unknown as Response
+
+test('timeoutMs bounds the whole call, the retry included', async () => {
+	mockFetch((init, attempt) =>
+		attempt === 0
+			? new Response('busy', { status: 503, headers: { 'retry-after': '0' } })
+			: hang(init)
+	)
+	const startedAt = Date.now()
+
+	const outcome = await decide.result({
+		...ASK,
+		questions: QUESTIONS,
+		timeoutMs: 50
+	})
+
+	expect(outcome.ok ? null : outcome.error.kind).toBe('timeout')
+	// One deadline, not a fresh 50 ms per attempt.
+	expect(Date.now() - startedAt).toBeLessThan(90)
+	expect(outcome.ok ? null : outcome.error.attempts).toBe(2)
+})
+
+test('an attempt past attemptTimeoutMs is abandoned and sent again', async () => {
+	const spy = mockFetch((init, attempt) =>
+		attempt === 0
+			? hang(init)
+			: answered({ refund: { type: 'noul', noul: 0.5 } })
+	)
+	const { decideWith } = decideReporting({ attemptTimeoutMs: 20 })
+
+	const outcome = await decideWith.result({ ...ASK, questions: QUESTIONS })
+
+	expect(spy).toHaveBeenCalledTimes(2)
+	expect(outcome.ok && outcome.usage?.attempts).toBe(2)
+})
+
+test('a Retry-After past the time left fails at once', async () => {
+	const spy = mockFetch(
+		() =>
+			new Response('slow down', {
+				status: 429,
+				headers: { 'retry-after': '1' }
+			})
+	)
+	const startedAt = Date.now()
+
+	const outcome = await decide.result({
+		...ASK,
+		questions: QUESTIONS,
+		timeoutMs: 500
+	})
+
+	expect(spy).toHaveBeenCalledTimes(1)
+	expect(outcome.ok ? null : outcome.error.kind).toBe('rate-limited')
+	expect(Date.now() - startedAt).toBeLessThan(100)
+})
+
+test('the pause before a retry ends with the caller signal', async () => {
+	mockFetch(
+		() =>
+			new Response('slow down', {
+				status: 503,
+				headers: { 'retry-after': '2' }
+			})
+	)
+	const controller = new AbortController()
+	setTimeout(() => controller.abort(), 20)
+	const startedAt = Date.now()
+
+	const outcome = await decide.result({
+		...ASK,
+		questions: QUESTIONS,
+		signal: controller.signal,
+		timeoutMs: 5_000
+	})
+
+	expect(outcome.ok ? null : outcome.error.kind).toBe('aborted')
+	expect(Date.now() - startedAt).toBeLessThan(500)
+})
+
+test('result() answers the usage with the answers', async () => {
+	mockFetch(() =>
+		Response.json({
+			model: 'jev-1.14',
+			answers: { refund: { type: 'noul', noul: 0.7 } },
+			usage: { input_tokens: 100, output_tokens: 3 }
+		})
+	)
+
+	const outcome = await decide.result({ ...ASK, questions: QUESTIONS })
+
+	if (!outcome.ok) throw outcome.error
+	expect(outcome.answers.refund.noul).toBe(0.7)
+	expect(outcome.usage).toMatchObject({
+		model: 'jev',
+		resolvedModel: 'jev-1.14',
+		provider: 'typesafe',
+		inputTokens: 100,
+		attempts: 1
+	})
+})
+
+test('result() answers the error instead of null', async () => {
+	mockFetch(() => new Response('bad question', { status: 422 }))
+	const { decideWith, onError } = decideReporting({})
+
+	const outcome = await decideWith.result({ ...ASK, questions: QUESTIONS })
+
+	if (outcome.ok) throw new Error('expected a failure')
+	expect(outcome.error).toMatchObject({
+		kind: 'request-failed',
+		status: 422,
+		attempts: 1
+	})
+	expect(outcome.error.latencyMs).toBeGreaterThanOrEqual(0)
+	// onError still hears about it.
+	expect(onError.mock.calls[0]?.[0]).toBe(outcome.error)
+})
+
+test('result() with no questions answers no usage', async () => {
+	expect(await decide.result({ ...ASK, questions: {} })).toEqual({
+		ok: true,
+		answers: {},
+		usage: null
+	})
+})
+
 // Compile-time only: the keys decide which models exist, a default makes the
 // model optional, and a typed usage context becomes required on every call.
 function typeChecks() {
@@ -712,5 +926,9 @@ function typeChecks() {
 	withContext({ ...ASK, questions: QUESTIONS, organizationId: 'org_1' })
 	// @ts-expect-error the usage context is required
 	withContext({ ...ASK, questions: QUESTIONS })
+	// @ts-expect-error result() takes the same arguments
+	withContext.result({ ...ASK, questions: QUESTIONS })
+	// @ts-expect-error result() is typed by the same keys
+	typesafeOnly.result({ ...ASK, questions: QUESTIONS }, 'clef')
 }
 void typeChecks
