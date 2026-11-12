@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/HansKristoffer/decision-api/compare/v2.0.0...v2.1.0) (2026-11-12)
+
+
+### Features
+
+* add Gemini Decision 1, with video, audio and PDF input ([#11](https://github.com/HansKristoffer/decision-api/issues/11)) ([a187761](https://github.com/HansKristoffer/decision-api/commit/a187761763a17ffba08b74935f6d14f8a88847d2))
+
 ## [2.0.0](https://github.com/HansKristoffer/decision-api/compare/v1.3.0...v2.0.0) (2026-11-12)
 
 
