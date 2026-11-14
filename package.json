@@ -1,6 +1,6 @@
 {
 	"name": "decision-api",
-	"version": "2.1.0",
+	"version": "2.1.1",
 	"description": "One typed client for decision models (TypeSafe Jev, Cloudflare Clef, OpenAI gpt-6-luna, Google gemini-decision-1, OpenRouter models such as Microsoft-Decision-1) that answer questions with calibrated probabilities",
 	"license": "MIT",
 	"author": "Kristoffer Hansen",
