@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.1](https://github.com/HansKristoffer/decision-api/compare/v2.1.0...v2.1.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* ship CHANGELOG.md in the npm package ([6cf300e](https://github.com/HansKristoffer/decision-api/commit/6cf300e660fbbb335088e89155b9e58fbd0e0553))
+* ship CHANGELOG.md in the npm package ([57a58e3](https://github.com/HansKristoffer/decision-api/commit/57a58e39952fa8b5eaed6bd8b24f6c33e52dec5c))
+
 ## [2.1.0](https://github.com/HansKristoffer/decision-api/compare/v2.0.0...v2.1.0) (2026-11-12)
 
 
