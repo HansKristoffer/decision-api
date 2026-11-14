@@ -34,6 +34,7 @@
 	},
 	"files": [
 		"dist",
+		"CHANGELOG.md",
 		"!dist/**/*.test.*"
 	],
 	"sideEffects": false,
